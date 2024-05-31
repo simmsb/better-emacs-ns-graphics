@@ -922,16 +922,21 @@ Non memoized version of `comp-cstr-intersection-no-mem'."
                       (> high most-positive-fixnum))
             t))))))
 
-(defun comp-cstr-symbol-p (cstr)
-  "Return t if CSTR is certainly a symbol."
+(defun comp-cstr-type-p (cstr type)
+  "Return t if CSTR is certainly of type TYPE."
   (with-comp-cstr-accessors
     (and (null (range cstr))
          (null (neg cstr))
-         (or (and (null (valset cstr))
-                  (equal (typeset cstr) '(symbol)))
-             (and (or (null (typeset cstr))
-                      (equal (typeset cstr) '(symbol)))
-                  (cl-every #'symbolp (valset cstr)))))))
+         (if (null (typeset cstr))
+             (and (length> (valset cstr) 0)
+                  (cl-every (get type 'cl-deftype-satisfies) (valset cstr)))
+           (and (equal (typeset cstr) (list type))
+                (cl-every (get type 'cl-deftype-satisfies) (valset cstr)))))))
+
+(defun comp-cstr-symbol-p (cstr)
+  "Return t if CSTR is certainly a symbol."
+  (comp-cstr-type-p cstr 'symbol))
+
 
 (defsubst comp-cstr-cons-p (cstr)
   "Return t if CSTR is certainly a cons."
