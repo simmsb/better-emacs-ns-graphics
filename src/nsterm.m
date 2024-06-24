@@ -2903,22 +2903,24 @@ static NSMutableDictionary *fringe_bmp;
 static void
 ns_define_fringe_bitmap (int which, unsigned short *bits, int h, int w)
 {
-  NSBezierPath *p = [NSBezierPath bezierPath];
-
   if (!fringe_bmp)
     fringe_bmp = [[NSMutableDictionary alloc] initWithCapacity:25];
 
-  [p moveToPoint:NSMakePoint (0, 0)];
 
-  for (int y = 0 ; y < h ; y++)
-    for (int x = 0 ; x < w ; x++)
-      {
-        bool bit = bits[y] & (1 << (w - x - 1));
-        if (bit)
-          [p appendBezierPathWithRect:NSMakeRect (x, y, 1, 1)];
-      }
+  for (int i = 0; i < h; i++)
+    bits[i] = ~bits[i];
 
-  [fringe_bmp setObject:p forKey:[NSNumber numberWithInt:which]];
+  CGDataProviderRef provider = CGDataProviderCreateWithData (NULL, bits,
+					   sizeof (unsigned short) * h, NULL);
+  if (provider) {
+    id p = (id)CGImageMaskCreate (w, h, 1, 1,
+                 sizeof (unsigned short),
+                 provider, NULL, 0);
+    CGDataProviderRelease (provider);
+
+    [fringe_bmp setObject:p forKey:[NSNumber numberWithInt:which]];
+  }
+
 }
 
 
@@ -2981,37 +2983,30 @@ ns_draw_fringe_bitmap (struct window *w, struct glyph_row *row,
       NSRectFill (clearRect);
     }
 
-  NSBezierPath *bmp = [fringe_bmp objectForKey:[NSNumber numberWithInt:p->which]];
+  CGImageRef bmp = (CGImageRef)[fringe_bmp objectForKey:[NSNumber numberWithInt:p->which]];
 
   if (bmp == nil
       && p->which < max_used_fringe_bitmap)
     {
       gui_define_fringe_bitmap (f, p->which);
-      bmp = [fringe_bmp objectForKey: [NSNumber numberWithInt: p->which]];
+      bmp = (CGImageRef)[fringe_bmp objectForKey: [NSNumber numberWithInt: p->which]];
     }
 
   if (bmp)
     {
-      NSAffineTransform *transform = [NSAffineTransform transform];
-      NSColor *bm_color;
+      CGRect bounds = CGRectMake (p->x, p->y - p->dh,
+			   CGImageGetWidth (bmp), CGImageGetHeight (bmp));
 
-      /* Because the image is defined at (0, 0) we need to take a copy
-         and then transform that copy to the new origin.  */
-      bmp = [bmp copy];
-      [transform translateXBy:p->x yBy:p->y - p->dh];
-      [bmp transformUsingAffineTransform:transform];
+      NSGraphicsContext *ctx = [NSGraphicsContext currentContext];
+      CGContextRef context = [ctx CGContext];
 
-      if (!p->cursor_p)
-        bm_color = [NSColor colorWithUnsignedLong:face->foreground];
-      else if (p->overlay_p)
-        bm_color = [NSColor colorWithUnsignedLong:face->background];
-      else
-        bm_color = f->output_data.ns->cursor_color;
+      CGContextTranslateCTM (context,
+			     CGRectGetMinX (bounds), CGRectGetMaxY (bounds));
+      CGContextScaleCTM (context, 1, -1);
 
-      [bm_color set];
-      [bmp fill];
-
-      [bmp release];
+      CGContextSetFillColorWithColor (context, [[NSColor colorWithUnsignedLong:face->foreground] CGColor]);
+      bounds.origin = CGPointZero;
+      CGContextDrawImage (context, bounds, bmp);
     }
   ns_unfocus (f);
 }
