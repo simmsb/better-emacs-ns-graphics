@@ -28,6 +28,7 @@ GNUstep port and post-20 update by Adrian Robert (arobert@cogsci.ucsd.edu)
 /* This should be the first include, as it may set up #defines affecting
    interpretation of even the system includes.  */
 #include <config.h>
+#include <CoreGraphics/CoreGraphics.h>
 
 #include "lisp.h"
 #include "dispextern.h"
@@ -510,10 +511,20 @@ ns_image_size_in_bytes (void *img)
 }
 
 /* Returns a pattern color, which is cached here.  */
-- (NSColor *)stippleMask
+- (CGImageRef)stippleMask
 {
-  if (stippleMask == nil)
-      stippleMask = [[NSColor colorWithPatternImage: self] retain];
+  if (stippleMask == nil) {
+    CGDataProviderRef provider = CGDataProviderCreateWithData (NULL, [bmRep bitmapData],
+                                                             [self sizeInBytes], NULL);
+    id mask = (id)CGImageMaskCreate(
+                                          [self size].width,
+                                          [self size].height,
+                                          8, 8, [self size].width,
+                                          provider, NULL, 0);
+
+    CGDataProviderRelease(provider);
+    stippleMask = (CGImageRef)[mask retain];
+  }
   return stippleMask;
 }
 

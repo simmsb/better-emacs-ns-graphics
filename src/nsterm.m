@@ -2998,15 +2998,26 @@ ns_draw_fringe_bitmap (struct window *w, struct glyph_row *row,
 			   CGImageGetWidth (bmp), CGImageGetHeight (bmp));
 
       NSGraphicsContext *ctx = [NSGraphicsContext currentContext];
+      [ctx saveGraphicsState];
       CGContextRef context = [ctx CGContext];
 
       CGContextTranslateCTM (context,
 			     CGRectGetMinX (bounds), CGRectGetMaxY (bounds));
       CGContextScaleCTM (context, 1, -1);
 
-      CGContextSetFillColorWithColor (context, [[NSColor colorWithUnsignedLong:face->foreground] CGColor]);
+      NSColor *bm_color;
+      if (!p->cursor_p)
+        bm_color = [NSColor colorWithUnsignedLong:face->foreground];
+      else if (p->overlay_p)
+        bm_color = [NSColor colorWithUnsignedLong:face->background];
+      else
+        bm_color = f->output_data.ns->cursor_color;
+
+      [bm_color set];
       bounds.origin = CGPointZero;
       CGContextDrawImage (context, bounds, bmp);
+
+      [[NSGraphicsContext currentContext] restoreGraphicsState];
     }
   ns_unfocus (f);
 }
@@ -3268,11 +3279,10 @@ static void
 ns_draw_underwave (struct glyph_string *s, EmacsCGFloat width, EmacsCGFloat x)
 {
   int wave_height = 3, wave_length = 2;
-  int y, dx, dy, odd, xmax;
-  NSPoint a, b;
+  int y, dx, dy, xmax;
   NSRect waveClip;
 
-  dx = wave_length;
+  dx = wave_length * 2;
   dy = wave_height - 1;
   y =  s->ybase - wave_height + 3;
   xmax = x + width;
@@ -3282,24 +3292,23 @@ ns_draw_underwave (struct glyph_string *s, EmacsCGFloat width, EmacsCGFloat x)
   [[NSGraphicsContext currentContext] saveGraphicsState];
   NSRectClip (waveClip);
 
-  /* Draw the waves */
-  a.x = x - ((int)(x) % dx) + (EmacsCGFloat) 0.5;
-  b.x = a.x + dx;
-  odd = (int)(a.x/dx) % 2;
-  a.y = b.y = y + 0.5;
+  float ax = x - ((int)(x) % dx);
+  float ay = y + wave_height / 2.0;
 
-  if (odd)
-    a.y += dy;
-  else
-    b.y += dy;
+  NSBezierPath *path = [[NSBezierPath alloc] init];
+  [path moveToPoint: (NSPoint){ ax, ay }];
 
-  while (a.x <= xmax)
+  NSPoint stepOne = { dx, 0 };
+  NSPoint controlOne = { 0.5 * dx, dy };
+  NSPoint controlTwo = { 0.5 * dx, -dy };
+
+  while (ax <= xmax)
     {
-      [NSBezierPath strokeLineFromPoint:a toPoint:b];
-      a.x = b.x, a.y = b.y;
-      b.x += dx, b.y = y + 0.5 + odd*dy;
-      odd = !odd;
+      [path relativeCurveToPoint:stepOne controlPoint1:controlOne controlPoint2:controlTwo];
+      ax += dx;
     }
+
+  [path stroke];
 
   /* Restore previous clipping rectangle(s) */
   [[NSGraphicsContext currentContext] restoreGraphicsState];
@@ -3820,10 +3829,35 @@ ns_maybe_dumpglyphs_background (struct glyph_string *s, char force_p)
       int box_line_width = max (s->face->box_horizontal_line_width, 0);
 
       if (s->stippled_p)
-	{
-	  struct ns_display_info *dpyinfo = FRAME_DISPLAY_INFO (s->f);
-	  [[dpyinfo->bitmaps[face->stipple-1].img stippleMask] set];
-	  goto fill;
+        {
+          [[NSColor colorWithUnsignedLong:face->background] set];
+          r = NSMakeRect (s->x, s->y + box_line_width,
+                          s->background_width,
+                          s->height - 2 * box_line_width);
+          NSRectFill (r);
+          s->background_filled_p = 1;
+
+          struct ns_display_info *dpyinfo = FRAME_DISPLAY_INFO (s->f);
+          CGImageRef mask =
+            [dpyinfo->bitmaps[face->stipple - 1].img stippleMask];
+
+          CGRect bounds = CGRectMake (s->x, s->y + box_line_width,
+                                      s->background_width,
+                                      s->height - 2 * box_line_width);
+          NSGraphicsContext *ctx = [NSGraphicsContext currentContext];
+          [ctx saveGraphicsState];
+          CGContextRef context = [ctx CGContext];
+
+          CGContextClipToRect (context, bounds);
+
+          CGContextScaleCTM (context, 1, -1);
+          [[NSColor colorWithUnsignedLong:face->foreground] set];
+
+          CGRect imageSize = CGRectMake (0, 0, CGImageGetWidth (mask),
+                                         CGImageGetHeight (mask));
+
+          CGContextDrawTiledImage (context, imageSize, mask);
+          [[NSGraphicsContext currentContext] restoreGraphicsState];
 	}
       else if (FONT_HEIGHT (s->font) < s->height - 2 * box_line_width
 	       /* When xdisp.c ignores FONT_HEIGHT, we cannot trust font
@@ -3846,7 +3880,6 @@ ns_maybe_dumpglyphs_background (struct glyph_string *s, char force_p)
 	  else
 	    [FRAME_CURSOR_COLOR (s->f) set];
 
-	fill:
 	  r = NSMakeRect (s->x, s->y + box_line_width,
 			  s->background_width,
 			  s->height - 2 * box_line_width);
@@ -4170,12 +4203,42 @@ ns_draw_stretch_glyph_string (struct glyph_string *s)
 	  dpyinfo = FRAME_DISPLAY_INFO (s->f);
 	  if (s->hl == DRAW_CURSOR)
 	    [FRAME_CURSOR_COLOR (s->f) set];
-	  else if (s->stippled_p)
-	    [[dpyinfo->bitmaps[s->face->stipple - 1].img stippleMask] set];
-	  else
-	    [[NSColor colorWithUnsignedLong: s->face->background] set];
+	  else if (s->stippled_p) {
+              [[NSColor colorWithUnsignedLong:s->face->background]
+                set];
+              NSRectFill (
+                NSMakeRect (x, s->y, background_width, s->height));
 
-	  NSRectFill (NSMakeRect (x, s->y, background_width, s->height));
+              CGImageRef mask =
+                [dpyinfo->bitmaps[s->face->stipple - 1]
+                    .img stippleMask];
+
+              CGRect bounds
+                = CGRectMake (s->x, s->y, s->background_width,
+                              s->height);
+
+              NSGraphicsContext *ctx =
+                [NSGraphicsContext currentContext];
+              [ctx saveGraphicsState];
+              CGContextRef context = [ctx CGContext];
+              CGContextClipToRect(context, bounds);
+              CGContextScaleCTM (context, 1, -1);
+              [[NSColor colorWithUnsignedLong:s->face->foreground]
+                set];
+
+              CGRect imageSize
+                = CGRectMake (0, 0, CGImageGetWidth (mask),
+                              CGImageGetHeight (mask));
+
+              CGContextDrawTiledImage (context, imageSize, mask);
+
+              [[NSGraphicsContext currentContext]
+		restoreGraphicsState];
+	    }
+	  else {
+	    [[NSColor colorWithUnsignedLong: s->face->background] set];
+            NSRectFill (NSMakeRect (x, s->y, background_width, s->height));
+          }
 	}
     }
 
